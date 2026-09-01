@@ -1,0 +1,18 @@
+﻿# Compiled Objects and Libraries
+*.o
+*.so
+*.dll
+*.exe
+*.out
+
+# Temporary and Build Files
+__pycache__/
+*.pyc
+*.pyo
+*.zip
+
+# OS and Editor metadata
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
