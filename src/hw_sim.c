@@ -2,6 +2,7 @@
  * @file hw_sim.c
  * @brief Hardware simulation engine for SPX-100 serial device.
  *        Models asynchronous transfer timing, register side-effects,
+ *        hardware stall/timeout injection, split status updates,
  *        and silicon errata (CTRL write latch post-reset).
  */
 
@@ -31,6 +32,8 @@ static int       g_worker_running;
 static int       g_transfer_pending;
 static int       g_transfer_had_data;
 static int       g_force_error_next;
+static int       g_force_stall;
+static int       g_split_status_update;
 
 static void *transfer_worker(void *arg) {
     (void)arg;
@@ -43,13 +46,26 @@ static void *transfer_worker(void *arg) {
             pthread_mutex_unlock(&g_lock);
             break;
         }
-        if (g_transfer_pending) {
+        if (g_transfer_pending && !g_force_stall) {
             pthread_mutex_unlock(&g_lock);
             struct timespec delay = {0, (long)g_transfer_delay_ms * 1000 * 1000};
             nanosleep(&delay, NULL);
             pthread_mutex_lock(&g_lock);
-            if (g_transfer_pending) {
-                g_status &= ~(1u << SPX_STATUS_BUSY_BIT);
+
+            if (g_transfer_pending && !g_force_stall) {
+                if (g_split_status_update) {
+                    /* Simulate hardware where BUSY de-asserts slightly before DONE/ERR appears */
+                    g_status &= ~(1u << SPX_STATUS_BUSY_BIT);
+                    pthread_mutex_unlock(&g_lock);
+
+                    struct timespec split_delay = {0, 500 * 1000}; /* 0.5ms window */
+                    nanosleep(&split_delay, NULL);
+
+                    pthread_mutex_lock(&g_lock);
+                } else {
+                    g_status &= ~(1u << SPX_STATUS_BUSY_BIT);
+                }
+
                 if (!g_transfer_had_data || g_force_error_next) {
                     g_status |= (1u << SPX_STATUS_ERR_BIT);
                     g_force_error_next = 0;
@@ -78,6 +94,8 @@ void hw_sim_reset(void) {
     g_transfer_pending = 0;
     g_transfer_had_data = 0;
     g_force_error_next = 0;
+    g_force_stall = 0;
+    g_split_status_update = 0;
     pthread_mutex_unlock(&g_lock);
 
     if (!g_worker_running) {
@@ -134,6 +152,18 @@ uint32_t hw_sim_start_write_count(void) {
 void hw_sim_force_next_error(void) {
     pthread_mutex_lock(&g_lock);
     g_force_error_next = 1;
+    pthread_mutex_unlock(&g_lock);
+}
+
+void hw_sim_force_stall(int stall) {
+    pthread_mutex_lock(&g_lock);
+    g_force_stall = stall;
+    pthread_mutex_unlock(&g_lock);
+}
+
+void hw_sim_enable_split_status_update(int enable) {
+    pthread_mutex_lock(&g_lock);
+    g_split_status_update = enable;
     pthread_mutex_unlock(&g_lock);
 }
 

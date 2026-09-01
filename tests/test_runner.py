@@ -1,7 +1,8 @@
 ﻿#!/usr/bin/env python3
 """
 test_runner.py -- Unit & Integration Test Suite for Embedded C Firmware Modules
-Validates Bitfield Helpers, SPX-100 Peripheral Driver, Atomic Counter, and SPSC Ring Buffer.
+Validates Bitfield Helpers, SPX-100 Peripheral Driver (including wall-clock timeout & split status updates),
+Relaxed Atomic Counter, and SPSC Ring Buffer.
 """
 
 import ctypes
@@ -9,6 +10,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC_DIR = os.path.join(PROJECT_ROOT, "src")
@@ -36,6 +38,10 @@ def bind_c_functions(lib):
     lib.hw_sim_peek.restype = ctypes.c_uint32
     lib.hw_sim_peek.argtypes = [ctypes.c_uint32]
     lib.hw_sim_force_next_error.restype = None
+    lib.hw_sim_force_stall.restype = None
+    lib.hw_sim_force_stall.argtypes = [ctypes.c_int]
+    lib.hw_sim_enable_split_status_update.restype = None
+    lib.hw_sim_enable_split_status_update.argtypes = [ctypes.c_int]
 
     # Bitfield API
     lib.get_field.restype = ctypes.c_uint32
@@ -48,6 +54,8 @@ def bind_c_functions(lib):
     lib.spx_init.argtypes = [ctypes.c_uint8]
     lib.spx_send_byte.restype = ctypes.c_int
     lib.spx_send_byte.argtypes = [ctypes.c_uint8]
+    lib.spx_send_byte_timeout.restype = ctypes.c_int
+    lib.spx_send_byte_timeout.argtypes = [ctypes.c_uint8, ctypes.c_uint32]
     lib.spx_is_busy.restype = ctypes.c_bool
     lib.spx_is_enabled.restype = ctypes.c_bool
 
@@ -105,6 +113,21 @@ def main():
     lib.hw_sim_force_next_error()
     err_rc = lib.spx_send_byte(0xCD)
     assert_test("spx_send_byte returns -1 on hardware error", err_rc == -1)
+
+    # Test real wall-clock timeout behavior
+    lib.hw_sim_force_stall(1)
+    t_start = time.time()
+    timeout_rc = lib.spx_send_byte_timeout(0xEE, 30) # 30ms timeout
+    t_elapsed = (time.time() - t_start) * 1000
+    lib.hw_sim_force_stall(0)
+    assert_test("spx_send_byte_timeout returns -2 on hardware stall", timeout_rc == -2)
+    assert_test("spx_send_byte_timeout honors wall-clock threshold (~30ms)", t_elapsed >= 25)
+
+    # Test decoupled split status update (BUSY clears before DONE is latched)
+    lib.hw_sim_enable_split_status_update(1)
+    split_rc = lib.spx_send_byte(0x77)
+    lib.hw_sim_enable_split_status_update(0)
+    assert_test("spx_send_byte succeeds during decoupled/split status updates", split_rc == 0)
     print()
 
     # ---- 3. Atomic Counter Tests ----
@@ -112,7 +135,7 @@ def main():
     lib.hw_sim_reset()
     for _ in range(100):
         lib.counter_isr_increment()
-    assert_test("counter_read matches 100 increments", lib.counter_read() == 100)
+    assert_test("counter_read matches 100 increments with __ATOMIC_RELAXED", lib.counter_read() == 100)
     print()
 
     # ---- 4. Lock-Free SPSC Ring Buffer Tests ----

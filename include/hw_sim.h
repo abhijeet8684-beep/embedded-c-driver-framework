@@ -15,6 +15,8 @@ uint32_t hw_sim_status_read_count(void);
 uint32_t hw_sim_txdata_write_count(void);
 uint32_t hw_sim_start_write_count(void);
 void     hw_sim_force_next_error(void);
+void     hw_sim_force_stall(int stall);
+void     hw_sim_enable_split_status_update(int enable);
 void     hw_sim_set_transfer_delay_ms(unsigned int ms);
 
 #ifdef __cplusplus
